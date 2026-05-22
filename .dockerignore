@@ -1,0 +1,13 @@
+node_modules
+dist
+
+.git
+.gitignore
+
+README.md
+SpecSheet.md
+compose.yml
+
+npm-debug.log*
+.env
+.env.*
