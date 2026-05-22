@@ -3,6 +3,7 @@ import { Router } from "express";
 import { isValidLocalLogin, isValidLocalToken, localTestUser } from "../auth/localUser.js";
 import { getBearerToken } from "../auth/token.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { authLoginAttemptsTotal, authTokenValidationAttemptsTotal } from "../metrics.js";
 
 export const authRouter = Router();
 
@@ -14,11 +15,21 @@ authRouter.post("/login", (req, res) => {
   };
 
   if (!isValidLocalLogin(username, password)) {
+    // Count only bounded outcomes, never usernames or credential values.
+    authLoginAttemptsTotal.inc({
+      outcome: "failure",
+    });
+
     res.status(401).json({
       error: "invalid_credentials",
     });
     return;
   }
+
+  // Count only bounded outcomes, never usernames or credential values.
+  authLoginAttemptsTotal.inc({
+    outcome: "success",
+  });
 
   res.status(200).json({
     token: localTestUser.token,
@@ -29,11 +40,21 @@ authRouter.get("/validate", (req, res) => {
   const token = getBearerToken(req.headers.authorization);
 
   if (!isValidLocalToken(token)) {
+    // Count validation outcomes without recording token contents.
+    authTokenValidationAttemptsTotal.inc({
+      outcome: "failure",
+    });
+
     res.status(401).json({
       error: "invalid_token",
     });
     return;
   }
+
+  // Count validation outcomes without recording token contents.
+  authTokenValidationAttemptsTotal.inc({
+    outcome: "success",
+  });
 
   res.status(200).json({
     valid: true,
