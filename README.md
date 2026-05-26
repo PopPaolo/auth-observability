@@ -1,141 +1,109 @@
 # Auth Observability Lab
 
-An SRE-focused observability lab built around a small Express authentication service.
+An SRE-focused observability lab built around a small Express authentication service. The goal is to demonstrate practical familiarity with backend instrumentation, containerized observability tooling, metrics, logs, dashboards, and safe operational debugging.
 
-This project is meant to show practical familiarity with backend instrumentation, Docker Compose, Prometheus, Grafana, Loki, Promtail, structured logging, and operational dashboard design. The service is intentionally small so the observability work is easy to inspect: each endpoint exists to create realistic health, auth, latency, error, metric, and log signals.
+![Auth Observability Grafana dashboard showing Prometheus metrics and Loki logs in the same time window](evidence/Auth%20Observability%20Dashboard.png)
 
-## What I Built
+## Project Summary
 
-- A TypeScript and Express service with health, login, token validation, protected profile, slow-debug, and error-debug routes
-- Prometheus metrics for request volume, status codes, latency, auth outcomes, token validation outcomes, authorization failures, CPU, and memory
-- Structured JSON request logs with request ID, route, method, status, latency, auth outcome, and safe failure reason
-- A Docker Compose stack for the app, Prometheus, Grafana, Loki, Promtail, and Grafana image rendering
-- A provisioned Grafana dashboard showing service health, traffic, auth behavior, latency, resource usage, and Loki logs in one view
-- A randomized traffic generator that creates mostly successful traffic plus controlled failed-login, invalid-token, `5xx`, slow-request, and `404` events
-- Evidence showing metrics and logs correlated in the same Grafana time window
+This repo is intentionally small so the observability work is easy to inspect. The auth service creates realistic operational signals: normal requests, failed logins, invalid tokens, protected-route failures, slow responses, `5xx` errors, process metrics, and structured request logs.
 
-## Why This Project Exists
+What this demonstrates:
 
-The goal is not to build a production identity provider. The goal is to demonstrate that I can instrument a backend service, choose useful operational signals, avoid unsafe observability practices, and connect metrics and logs into a workflow that supports troubleshooting.
-
-The auth flow is fake and local-only by design. That keeps the scope focused on observability patterns rather than real credential handling.
+- Instrumenting an Express service with Prometheus metrics
+- Designing bounded, useful metric labels
+- Writing safe structured JSON logs
+- Collecting container logs with Promtail
+- Querying logs with Loki and LogQL
+- Building a Grafana dashboard that combines metrics and logs
+- Using Docker Compose to run a local multi-service observability stack
+- Avoiding sensitive data in logs and high-cardinality values in metrics
 
 ## Architecture
 
-| Area | Technology | What It Does Here |
+| Component | Technology | Purpose |
 |---|---|---|
-| Backend service | Express + TypeScript | Provides controlled endpoints that produce normal traffic, auth failures, latency, and server errors |
-| Container runtime | Docker Compose | Runs the app and observability services together with predictable local networking |
-| Metrics | Prometheus + `prom-client` | Scrapes numeric time-series data from `/metrics` for rates, latency, auth outcomes, and process health |
-| Dashboard | Grafana | Visualizes Prometheus metrics and Loki logs in one operational view |
-| Logs | Loki | Stores queryable application logs without needing a heavyweight log platform |
-| Log collector | Promtail | Reads Docker container logs and ships them to Loki with service labels |
-| Image export | Grafana image renderer | Allows dashboard and panel screenshots to be exported as evidence |
+| Auth service | Express + TypeScript | Produces controlled auth, latency, error, metric, and log signals |
+| Runtime | Docker Compose | Runs the app, Prometheus, Grafana, Loki, Promtail, and renderer together |
+| Metrics endpoint | `prom-client` | Exposes Prometheus-formatted app and process metrics at `/metrics` |
+| Metrics backend | Prometheus | Scrapes and stores time-series metrics |
+| Log collector | Promtail | Reads Docker container stdout logs, labels them, and ships them to Loki |
+| Log backend | Loki | Stores queryable application logs |
+| Dashboard | Grafana | Displays Prometheus metrics and Loki logs in one investigation view |
+| Image export | Grafana image renderer | Exports dashboard/panel screenshots for evidence |
 
-## Observability Technologies
+## Observability Data Flow
 
-**Prometheus**
+Metrics:
 
-Prometheus is the metrics system. The service exposes a `/metrics` endpoint in Prometheus exposition format, and Prometheus scrapes it on an interval. This is useful for answering aggregate operational questions such as:
+```text
+Express app
+-> /metrics endpoint
+-> Prometheus scrape
+-> Grafana dashboard panels
+```
 
-- Is the service up?
-- How many requests are happening per second?
-- What percentage of requests are failing?
-- Are login failures increasing?
-- Is p95 latency getting worse?
+Logs:
 
-The project uses bounded labels such as `route`, `method`, `status`, `outcome`, and `reason`. It intentionally does not put request IDs, usernames, tokens, or other high-cardinality values into metrics.
+```text
+Express JSON logs
+-> container stdout
+-> Promtail Docker discovery
+-> Loki
+-> Grafana dashboard / Explore
+```
 
-**Grafana**
+Promtail is not shown as a dashboard panel because it is plumbing. Its job is proven when `auth-service` container logs appear in Loki with labels such as `service="auth-service"`.
 
-Grafana is the visualization and investigation layer. It connects to Prometheus for metrics and Loki for logs. The dashboard is provisioned from JSON so the view is repeatable instead of manually configured.
+## What Each Tool Shows
 
-The dashboard is designed to answer practical questions quickly:
+**Prometheus** stores numeric time-series metrics. In this project it answers questions like: is the service up, how much traffic is flowing, are `5xx` errors increasing, are failed logins increasing, and is p95 latency degrading.
 
-- Is the auth service up?
-- Are login attempts succeeding or failing?
-- Are token validations failing?
-- Are `5xx` errors happening?
-- Did latency degrade?
-- Do logs in the same time window explain the metric movement?
+**Grafana** is the operational view. It displays Prometheus metrics and Loki logs in the same time range so a metric spike can be investigated with request-level logs.
 
-**Loki**
+**Loki** stores structured application logs. It lets the dashboard and Grafana Explore filter request logs by fields such as `authFlow`, `authOutcome`, `failureReason`, `route`, `status`, and `requestId`.
 
-Loki stores logs and makes them queryable with LogQL. It is a good fit for this lab because it works naturally with Grafana and uses labels to find streams of logs without indexing every word like a traditional full-text logging system.
+**Promtail** collects Docker logs and forwards them to Loki. The app only writes JSON logs to stdout, which keeps logging container-friendly and avoids coupling the service directly to Loki.
 
-The app writes newline-delimited JSON logs to stdout. Loki stores those logs so they can be filtered by fields like:
-
-- `authFlow`
-- `authOutcome`
-- `failureReason`
-- `route`
-- `status`
-- `requestId`
-
-**Promtail**
-
-Promtail is the log shipper. In this project it discovers Docker containers through the Docker socket, reads their stdout logs, adds labels such as `service="auth-service"`, and pushes the logs to Loki.
-
-That means the app does not need to know about Loki directly. It only needs to write safe structured logs to stdout, which is the normal container-friendly logging pattern.
-
-**Structured JSON Logs**
-
-The request logger emits one JSON log per completed request. The important fields are:
-
-- `requestId`
-- `method`
-- `route`
-- `status`
-- `durationMs`
-- `authFlow`
-- `authOutcome`
-- `failureReason`
-
-The logger deliberately excludes request bodies, passwords, raw tokens, authorization headers, user IDs, and IP addresses. This demonstrates the security side of observability: logs should help investigation without becoming a sensitive-data leak.
+**Docker Compose** defines the local stack. It is the right level for this repo because the goal is to show how the observability services work together, not to provision remote infrastructure.
 
 ## Signals Implemented
 
-| Signal | Where It Appears | Why It Matters |
+| Signal | Source | Why It Matters |
 |---|---|---|
-| Service up/down | Prometheus `up`, Grafana status panel | Basic availability check |
-| Request rate | `http_requests_total` | Shows traffic volume and spikes |
-| Error rate | `http_requests_total{status=~"5.."}` | Shows server-side failures |
-| Request latency | `http_request_duration_seconds` | Shows degradation even when requests still succeed |
-| Login success/failure | `auth_login_attempts_total` and JSON logs | Shows auth behavior and failed-login spikes |
-| Token validation success/failure | `auth_token_validation_attempts_total` and JSON logs | Shows invalid or missing token patterns |
-| Protected-route auth failures | `auth_authorization_failures_total` and JSON logs | Shows access attempts that fail authorization |
-| CPU and memory | default `prom-client` process metrics | Shows basic runtime resource behavior |
+| Service up/down | Prometheus `up` | Basic availability |
+| Request rate | `http_requests_total` | Traffic volume and spikes |
+| Error rate | `http_requests_total{status=~"5.."}` | Server-side failures |
+| Request latency | `http_request_duration_seconds` | Performance degradation |
+| Login outcomes | `auth_login_attempts_total` and JSON logs | Successful versus failed auth behavior |
+| Token validation outcomes | `auth_token_validation_attempts_total` and JSON logs | Invalid or missing token patterns |
+| Authorization failures | `auth_authorization_failures_total` and JSON logs | Protected-route access failures |
+| CPU and memory | default `prom-client` process metrics | Runtime resource behavior |
 
 ## Dashboard Evidence
 
-Evidence is stored in:
+Evidence screenshot:
 
-- `evidence/Auth Observability Dashboard.png`
+```text
+evidence/Auth Observability Dashboard.png
+```
 
-The screenshot shows Grafana displaying Prometheus metrics and Loki logs in the same dashboard time window. Promtail is not a visual dashboard component; it is the log shipping layer that reads Docker container stdout, labels the stream as `service="auth-service"`, and sends those JSON logs to Loki.
+The screenshot shows Grafana displaying Prometheus metrics and Loki logs for the same traffic window. That is the main investigation workflow:
 
-The useful workflow is:
-
-1. Prometheus panels show a change in service behavior.
-2. Loki logs show the request-level events from the same time range.
-3. Grafana keeps both views together so the metric spike and related logs can be inspected without switching tools.
+1. Prometheus panels show a behavior change, such as failed logins, invalid tokens, latency, or `5xx` errors.
+2. Loki logs show the request-level JSON events from the same time range.
+3. Grafana keeps both views together so the cause can be inspected without switching tools.
 
 Example correlations:
 
-- A failed-login rate increase lines up with logs where `authFlow="login"` and `authOutcome="failure"`.
-- A token-validation failure increase lines up with logs where `authFlow="token_validation"` and `failureReason="invalid_token"`.
-- A `5xx` error-rate increase lines up with logs where `status=500`.
-- Slow-request latency samples line up with logs where `route="/debug/slow"`.
+- Failed-login activity lines up with logs where `authFlow="login"` and `authOutcome="failure"`.
+- Invalid-token activity lines up with logs where `authFlow="token_validation"` and `failureReason="invalid_token"`.
+- Error-rate activity lines up with logs where `status=500`.
+- Slow-request latency lines up with logs where `route="/debug/slow"`.
 
-## Useful Queries
+## Key Queries
 
-Prometheus metrics:
-
-Service availability:
-
-```promql
-up{job="auth-service"}
-```
+These are the core PromQL and LogQL queries behind the dashboard and investigation workflow.
 
 Request rate by route, method, and status:
 
@@ -176,15 +144,13 @@ sum by (outcome) (
 )
 ```
 
-Loki logs:
-
 Failed login logs:
 
 ```logql
 {service="auth-service"} | json | authFlow="login" | authOutcome="failure"
 ```
 
-Invalid token validation logs:
+Invalid token logs:
 
 ```logql
 {service="auth-service"} | json | authFlow="token_validation" | failureReason="invalid_token"
@@ -196,33 +162,25 @@ Server error logs:
 {service="auth-service"} | json | status >= 500
 ```
 
-Slow request logs:
-
-```logql
-{service="auth-service"} | json | route="/debug/slow"
-```
-
 Application logs without routine health and metrics noise:
 
 ```logql
 {service="auth-service"} | json | route!="/health" | route!="/metrics"
 ```
 
-## API Surface
+## Service Behavior
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/health` | Basic service health check |
-| `GET` | `/metrics` | Prometheus-formatted metrics |
+| `GET` | `/health` | Health check |
+| `GET` | `/metrics` | Prometheus metrics |
 | `POST` | `/login` | Fake local-only credential check |
-| `GET` | `/validate` | Validate a token-like value |
-| `GET` | `/profile` | Protected route requiring a valid token-like value |
-| `GET` | `/debug/slow` | Predictable latency for dashboard and alert testing |
-| `GET` | `/debug/error` | Predictable `500` response for error-rate testing |
+| `GET` | `/validate` | Token-like validation |
+| `GET` | `/profile` | Protected route requiring valid auth |
+| `GET` | `/debug/slow` | Predictable latency for dashboard testing |
+| `GET` | `/debug/error` | Predictable `500` for error-rate testing |
 
-## Fake Auth Data
-
-The app uses one fake local test user:
+Fake local test data:
 
 ```text
 username: walter.white
@@ -230,37 +188,39 @@ password: say-my-name
 token: heisenberg-local-token
 ```
 
-These values are intentionally fake. The project does not implement production identity provider behavior.
+These values are intentionally fake. This project does not implement a production identity provider.
 
-## Local Reference
+## Traffic Generator
 
-The repository can be run locally, but the main purpose is to show the instrumentation and observability workflow.
+`scripts/generate-traffic.js` creates dashboard activity with a realistic balance: mostly successful traffic, plus controlled failed logins, invalid tokens, protected-route failures, slow requests, `404`s, and `5xx`s.
 
-Install dependencies:
-
-```bash
-npm install
-```
-
-Run tests:
-
-```bash
-npm test
-```
-
-Start the full stack:
-
-```bash
-docker compose up --build
-```
-
-Generate varied traffic:
+The script exists so the dashboard and Loki panels can show operational behavior without requiring real users or real incidents.
 
 ```bash
 npm run traffic
 ```
 
-Local endpoints:
+## Safety Decisions
+
+- No real user data
+- No production identity provider behavior
+- No passwords, raw tokens, secrets, or authorization headers in logs
+- No request IDs, usernames, tokens, or IP addresses in Prometheus labels
+- Route metrics use bounded route labels instead of raw URLs
+- Logs include safe investigation fields such as `requestId`, `route`, `status`, `authFlow`, `authOutcome`, and `failureReason`
+
+## Local Reference
+
+The repo can be run locally, but the main purpose is to show the instrumentation and observability workflow.
+
+```bash
+npm install
+npm test
+docker compose up --build
+npm run traffic
+```
+
+Local services:
 
 | Service | URL |
 |---|---|
@@ -276,11 +236,15 @@ username: admin
 password: admin
 ```
 
-## Project Guardrails
+## Official Documentation
 
-- Fake local-only credentials only
-- No real user data
-- No production identity provider behavior
-- No frontend application
-- No passwords, raw tokens, secrets, or full authorization headers in logs
-- No high-cardinality request values in Prometheus labels
+- [Express documentation](https://expressjs.com/)
+- [TypeScript Handbook](https://www.typescriptlang.org/docs/handbook/intro.html)
+- [Docker Compose documentation](https://docs.docker.com/compose/)
+- [Prometheus documentation](https://prometheus.io/docs/introduction/overview/)
+- [PromQL querying basics](https://prometheus.io/docs/prometheus/latest/querying/basics/)
+- [`prom-client` for Node.js](https://github.com/siimon/prom-client)
+- [Grafana dashboards documentation](https://grafana.com/docs/grafana/latest/visualizations/dashboards/)
+- [Grafana Loki documentation](https://grafana.com/docs/loki/latest/)
+- [LogQL documentation](https://grafana.com/docs/loki/latest/logql/)
+- [Promtail documentation](https://grafana.com/docs/loki/latest/send-data/promtail/)
