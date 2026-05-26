@@ -8,6 +8,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   const token = getBearerToken(req.headers.authorization);
 
   if (!isValidLocalToken(token)) {
+    res.locals.authFlow = "authorization";
+    res.locals.authOutcome = "failure";
+    res.locals.failureReason = token === null ? "missing_token" : "invalid_token";
+
     // Keep the reason label bounded and do not expose token contents.
     authAuthorizationFailuresTotal.inc({
       reason: token === null ? "missing_token" : "invalid_token",
@@ -18,6 +22,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     });
     return;
   }
+
+  res.locals.authFlow = "authorization";
+  res.locals.authOutcome = "success";
 
   next();
 }

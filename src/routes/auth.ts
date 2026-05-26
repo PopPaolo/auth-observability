@@ -15,6 +15,10 @@ authRouter.post("/login", (req, res) => {
   };
 
   if (!isValidLocalLogin(username, password)) {
+    res.locals.authFlow = "login";
+    res.locals.authOutcome = "failure";
+    res.locals.failureReason = "invalid_credentials";
+
     // Count only bounded outcomes, never usernames or credential values.
     authLoginAttemptsTotal.inc({
       outcome: "failure",
@@ -27,6 +31,9 @@ authRouter.post("/login", (req, res) => {
   }
 
   // Count only bounded outcomes, never usernames or credential values.
+  res.locals.authFlow = "login";
+  res.locals.authOutcome = "success";
+
   authLoginAttemptsTotal.inc({
     outcome: "success",
   });
@@ -40,6 +47,10 @@ authRouter.get("/validate", (req, res) => {
   const token = getBearerToken(req.headers.authorization);
 
   if (!isValidLocalToken(token)) {
+    res.locals.authFlow = "token_validation";
+    res.locals.authOutcome = "failure";
+    res.locals.failureReason = token === null ? "missing_token" : "invalid_token";
+
     // Count validation outcomes without recording token contents.
     authTokenValidationAttemptsTotal.inc({
       outcome: "failure",
@@ -52,6 +63,9 @@ authRouter.get("/validate", (req, res) => {
   }
 
   // Count validation outcomes without recording token contents.
+  res.locals.authFlow = "token_validation";
+  res.locals.authOutcome = "success";
+
   authTokenValidationAttemptsTotal.inc({
     outcome: "success",
   });

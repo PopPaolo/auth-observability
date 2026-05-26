@@ -15,6 +15,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
         route: req.route?.path ?? req.path,
         status: res.statusCode,
         durationMs: Number(durationMs.toFixed(2)),
+        authFlow: res.locals.authFlow,
+        authOutcome: res.locals.authOutcome,
+        failureReason: res.locals.failureReason,
       }),
     );
   });
