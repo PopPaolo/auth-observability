@@ -7,21 +7,72 @@ const durationSeconds = Number(process.env.DURATION_SECONDS ?? DEFAULT_DURATION_
 const delayMs = Number(process.env.DELAY_MS ?? DEFAULT_DELAY_MS);
 const token = "heisenberg-local-token";
 
-// Keep normal traffic common while still creating auth failures, 5xxs, and latency samples.
-const scenarios = [
-  { name: "health", weight: 8, request: () => get("/health") },
-  { name: "login_success", weight: 5, request: () => postJson("/login", { username: "walter.white", password: "say-my-name" }) },
-  { name: "login_failure", weight: 4, request: () => postJson("/login", { username: "walter.white", password: "wrong" }) },
-  { name: "validate_success", weight: 5, request: () => get("/validate", { Authorization: `Bearer ${token}` }) },
-  { name: "validate_failure", weight: 3, request: () => get("/validate", { Authorization: "Bearer bad-token" }) },
-  { name: "profile_success", weight: 3, request: () => get("/profile", { Authorization: `Bearer ${token}` }) },
-  { name: "profile_missing_token", weight: 2, request: () => get("/profile") },
-  { name: "profile_invalid_token", weight: 2, request: () => get("/profile", { Authorization: "Bearer bad-token" }) },
-  { name: "debug_error", weight: 1, request: () => get("/debug/error") },
-  { name: "debug_slow", weight: 1, request: () => get("/debug/slow") },
+const loginAttempts = [
+  {
+    name: "valid_credentials",
+    weight: 14,
+    body: () => ({ username: "walter.white", password: "say-my-name" }),
+  },
+  {
+    name: "wrong_password",
+    weight: 3,
+    body: () => ({ username: "walter.white", password: pick(["wrong", "not-the-one", "blue-sky"]) }),
+  },
+  {
+    name: "unknown_user",
+    weight: 1,
+    body: () => ({ username: pick(["jesse.pinkman", "saul.goodman", "gus.fring"]), password: "say-my-name" }),
+  },
+  {
+    name: "missing_password",
+    weight: 1,
+    body: () => ({ username: "walter.white" }),
+  },
+  {
+    name: "missing_username",
+    weight: 1,
+    body: () => ({ password: "say-my-name" }),
+  },
+  {
+    name: "empty_body",
+    weight: 1,
+    body: () => ({}),
+  },
+  {
+    name: "random_credentials",
+    weight: 1,
+    body: () => ({ username: `user-${randomId()}`, password: `pass-${randomId()}` }),
+  },
 ];
 
-const counts = new Map(scenarios.map((scenario) => [scenario.name, 0]));
+const tokenVariants = [
+  { name: "valid_token", weight: 14, headers: () => ({ Authorization: `Bearer ${token}` }) },
+  { name: "bad_token", weight: 3, headers: () => ({ Authorization: `Bearer bad-token-${randomId()}` }) },
+  { name: "empty_bearer", weight: 1, headers: () => ({ Authorization: "Bearer " }) },
+  { name: "wrong_scheme", weight: 1, headers: () => ({ Authorization: `Basic ${randomId()}` }) },
+  { name: "missing_header", weight: 1, headers: () => ({}) },
+  { name: "malformed_header", weight: 1, headers: () => ({ Authorization: randomId() }) },
+];
+
+const unknownPaths = [
+  () => `/unknown/${randomId()}`,
+  () => `/debug/missing-${randomId()}`,
+  () => `/profile/${randomId()}`,
+  () => `/login/${randomId()}`,
+];
+
+// Keep normal traffic common while creating varied auth failures, 5xxs, latency samples, and 404s.
+const scenarios = [
+  { name: "health", weight: 10, request: () => get("/health") },
+  { name: "login", weight: 9, request: loginRequest },
+  { name: "validate", weight: 8, request: validateRequest },
+  { name: "profile", weight: 6, request: profileRequest },
+  { name: "debug_error", weight: 1, request: () => get("/debug/error") },
+  { name: "debug_slow", weight: 1, request: () => get("/debug/slow") },
+  { name: "unknown_route", weight: 1, request: () => get(pick(unknownPaths)()) },
+];
+
+const counts = new Map();
 const statuses = new Map();
 
 main().catch((error) => {
@@ -41,7 +92,7 @@ async function main() {
 
     try {
       const response = await scenario.request();
-      increment(counts, scenario.name);
+      increment(counts, scenario.lastVariant ? `${scenario.name}_${scenario.lastVariant}` : scenario.name);
       increment(statuses, response.status);
       process.stdout.write(".");
     } catch (error) {
@@ -84,6 +135,30 @@ function chooseScenario() {
   return scenarios.at(-1);
 }
 
+function loginRequest() {
+  const attempt = pickWeighted(loginAttempts);
+  const scenario = scenarios.find((candidate) => candidate.name === "login");
+  scenario.lastVariant = attempt.name;
+
+  return postJson("/login", attempt.body());
+}
+
+function validateRequest() {
+  const variant = pickWeighted(tokenVariants);
+  const scenario = scenarios.find((candidate) => candidate.name === "validate");
+  scenario.lastVariant = variant.name;
+
+  return get("/validate", variant.headers());
+}
+
+function profileRequest() {
+  const variant = pickWeighted(tokenVariants);
+  const scenario = scenarios.find((candidate) => candidate.name === "profile");
+  scenario.lastVariant = variant.name;
+
+  return get("/profile", variant.headers());
+}
+
 function get(path, headers = {}) {
   return fetch(`${baseUrl}${path}`, { headers });
 }
@@ -106,6 +181,29 @@ function printMap(map) {
   for (const [key, value] of map.entries()) {
     console.log(`${key}: ${value}`);
   }
+}
+
+function pick(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function pickWeighted(items) {
+  const totalWeight = items.reduce((sum, item) => sum + item.weight, 0);
+  let remaining = Math.random() * totalWeight;
+
+  for (const item of items) {
+    remaining -= item.weight;
+
+    if (remaining <= 0) {
+      return item;
+    }
+  }
+
+  return items.at(-1);
+}
+
+function randomId() {
+  return Math.random().toString(36).slice(2, 10);
 }
 
 function sleep(ms) {
