@@ -8,7 +8,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "npm run build && node --test test/*.test.js",
-    "traffic": "node scripts/generate-traffic.js"
+    "traffic": "node scripts/generate-traffic.js",
+    "alert:5xx": "node scripts/trigger-alert.js 5xx",
+    "alert:login-latency": "node scripts/trigger-alert.js login-latency",
+    "alert:failed-login": "node scripts/trigger-alert.js failed-login",
+    "alert:token-failure": "node scripts/trigger-alert.js token-failure"
   },
   "keywords": [],
   "author": "",

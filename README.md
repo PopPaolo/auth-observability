@@ -27,6 +27,7 @@ What this demonstrates:
 | Runtime | Docker Compose | Runs the app, Prometheus, Grafana, Loki, Promtail, and renderer together |
 | Metrics endpoint | `prom-client` | Exposes Prometheus-formatted app and process metrics at `/metrics` |
 | Metrics backend | Prometheus | Scrapes and stores time-series metrics |
+| Alerting | Prometheus + Alertmanager | Evaluates version-controlled alert rules and handles alert grouping/routing |
 | Log collector | Promtail | Reads Docker container stdout logs, labels them, and ships them to Loki |
 | Log backend | Loki | Stores queryable application logs |
 | Dashboard | Grafana | Displays Prometheus metrics and Loki logs in one investigation view |
@@ -58,6 +59,8 @@ Promtail is not shown as a dashboard panel because it is plumbing. Its job is pr
 ## What Each Tool Shows
 
 **Prometheus** stores numeric time-series metrics. In this project it answers questions like: is the service up, how much traffic is flowing, are `5xx` errors increasing, are failed logins increasing, and is p95 latency degrading.
+
+**Alertmanager** receives firing alerts from Prometheus. The local configuration uses a no-op receiver so alert state can be inspected without sending real notifications.
 
 **Grafana** is the operational view. It displays Prometheus metrics and Loki logs in the same time range so a metric spike can be investigated with request-level logs.
 
@@ -199,6 +202,32 @@ The script exists so the dashboard and Loki panels can show operational behavior
 ```bash
 npm run traffic
 ```
+
+## Alerts
+
+Prometheus owns alert evaluation by loading `alerts.yml`. Alertmanager handles alert grouping and routing. Grafana is kept as the dashboard/investigation layer, not the alert-rule owner.
+
+Local alert state:
+
+| Tool | URL | Purpose |
+|---|---|---|
+| Prometheus | `http://localhost:9090/alerts` | Source of truth for pending/firing alert evaluation |
+| Alertmanager | `http://localhost:9093` | Alert grouping, routing, silence, and receiver state |
+| Grafana | `http://localhost:3001` | Dashboard and Loki log investigation |
+
+| Alert | Threshold | Operational concern | Test method | First response |
+|---|---|---|---|---|
+| `AuthServiceDown` | `up{job="auth-service"} == 0` for 1 minute | The service is unavailable or Prometheus cannot scrape it | Run `docker compose stop auth-service`, then check Prometheus alerts after 1 minute | Check `docker compose ps`, auth-service logs, and `/health`; restart or roll back if needed |
+| `AuthServiceHigh5xxRate` | More than `0.5` `5xx` responses per second over 5 minutes for 2 minutes | Users are hitting sustained server-side failures | Run `npm run alert:5xx` | Query Loki for `status >= 500`, identify the route, and inspect recent code or dependency changes |
+| `AuthServiceHighLoginLatency` | `/login` p95 latency above `500ms` for 2 minutes | Users cannot sign in quickly enough | Start the stack with `AUTH_LOGIN_DELAY_MS=750 docker compose up --build`, then run `npm run alert:login-latency` | Check app saturation and any auth dependency path before widening capacity or rolling back |
+| `AuthServiceFailedLoginSpike` | Failed logins above `0.75` per second over 5 minutes for 2 minutes | Credential stuffing, bot traffic, or broken clients | Run `npm run alert:failed-login` | Inspect failed-login logs and compare traffic source patterns outside metric labels |
+| `AuthServiceTokenValidationFailureSpike` | Failed token validations above `0.75` per second over 5 minutes for 2 minutes | Expired, malformed, or replayed tokens are spiking | Run `npm run alert:token-failure` | Inspect `token_validation` failure logs and confirm whether clients are sending expired or malformed tokens |
+
+The spike thresholds are intentionally above single-request noise and above the default mixed traffic generator. They require sustained abnormal traffic before firing.
+
+Alert trigger scripts default to `DURATION_SECONDS=180` and `DELAY_MS=100`, which is long enough for the current `for: 2m` alert rules to fire.
+
+
 
 ## Safety Decisions
 

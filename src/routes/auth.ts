@@ -8,7 +8,9 @@ import { authLoginAttemptsTotal, authTokenValidationAttemptsTotal } from "../met
 export const authRouter = Router();
 
 // Local-only login flow for exercising auth metrics without real user data.
-authRouter.post("/login", (req, res) => {
+authRouter.post("/login", async (req, res) => {
+  await applyConfiguredLoginDelay();
+
   const { username, password } = req.body as {
     username?: string;
     password?: string;
@@ -81,3 +83,15 @@ authRouter.get("/profile", requireAuth, (_req, res) => {
     displayName: localTestUser.displayName,
   });
 });
+
+async function applyConfiguredLoginDelay(): Promise<void> {
+  const delayMs = Number(process.env.AUTH_LOGIN_DELAY_MS ?? 0);
+
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return;
+  }
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, Math.min(delayMs, 5000));
+  });
+}

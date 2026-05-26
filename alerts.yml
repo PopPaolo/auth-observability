@@ -1,0 +1,61 @@
+groups:
+  - name: auth-service.rules
+    rules:
+      - alert: AuthServiceDown
+        expr: up{job="auth-service"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: Auth service is down
+          description: Prometheus has been unable to scrape auth-service for at least 1 minute.
+          runbook: Check docker compose ps, auth-service logs, and the /health endpoint.
+
+      - alert: AuthServiceHigh5xxRate
+        expr: |
+          sum(rate(http_requests_total{job="auth-service",status=~"5.."}[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: Auth service has a sustained high 5xx rate
+          description: Auth service is returning more than 0.5 server errors per second over 1 minute.
+          runbook: Inspect Loki logs with status >= 500 and check recent deploys or debug/error traffic.
+
+      - alert: AuthServiceHighLoginLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(http_request_duration_seconds_bucket{job="auth-service",route="/login"}[5m])
+            )
+          ) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Login p95 latency is high
+          description: p95 latency for /login is above 500ms for at least 2 minutes.
+          runbook: Check upstream auth dependencies, CPU saturation, and Loki logs for slow /login requests.
+
+      - alert: AuthServiceFailedLoginSpike
+        expr: |
+          sum(rate(auth_login_attempts_total{job="auth-service",outcome="failure"}[5m])) > 0.75
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Failed login rate is spiking
+          description: Failed local-login attempts are above 0.75 per second over 5 minutes.
+          runbook: Inspect login failure logs and compare source traffic patterns outside Prometheus labels.
+
+      - alert: AuthServiceTokenValidationFailureSpike
+        expr: |
+          sum(rate(auth_token_validation_attempts_total{job="auth-service",outcome="failure"}[5m])) > 0.75
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Token validation failures are spiking
+          description: Failed token validation attempts are above 0.75 per second over 5 minutes.
+          runbook: Inspect token_validation failure logs and confirm whether clients are sending expired or malformed tokens.
