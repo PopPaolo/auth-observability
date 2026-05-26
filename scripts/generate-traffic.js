@@ -7,6 +7,8 @@ const durationSeconds = Number(process.env.DURATION_SECONDS ?? DEFAULT_DURATION_
 const delayMs = Number(process.env.DELAY_MS ?? DEFAULT_DELAY_MS);
 const token = "heisenberg-local-token";
 
+// Login traffic is weighted toward the valid local user so the service looks mostly healthy,
+// while still producing enough failed-login events for metrics, logs, and alerts.
 const loginAttempts = [
   {
     name: "valid_credentials",
@@ -45,6 +47,8 @@ const loginAttempts = [
   },
 ];
 
+// These variants exercise successful validation, invalid tokens, missing headers, and malformed
+// auth headers without sending real secrets or high-cardinality user data.
 const tokenVariants = [
   { name: "valid_token", weight: 14, headers: () => ({ Authorization: `Bearer ${token}` }) },
   { name: "bad_token", weight: 3, headers: () => ({ Authorization: `Bearer bad-token-${randomId()}` }) },
@@ -54,6 +58,7 @@ const tokenVariants = [
   { name: "malformed_header", weight: 1, headers: () => ({ Authorization: randomId() }) },
 ];
 
+// Random 404s verify that route labels stay bounded as "unmatched" in Prometheus.
 const unknownPaths = [
   () => `/unknown/${randomId()}`,
   () => `/debug/missing-${randomId()}`,
@@ -86,12 +91,13 @@ async function main() {
   const stopAt = Date.now() + durationSeconds * 1000;
   console.log(`Generating fake traffic against ${baseUrl} for ${durationSeconds}s.`);
 
-  // Sequential requests make DELAY_MS easy to reason about when watching dashboard rates.
+  // Sequential requests make DELAY_MS easy to reason about while watching dashboard rates.
   while (Date.now() < stopAt) {
     const scenario = chooseScenario();
 
     try {
       const response = await scenario.request();
+      // Variant-specific buckets make it clear which random auth paths ran during a demo.
       increment(counts, scenario.lastVariant ? `${scenario.name}_${scenario.lastVariant}` : scenario.name);
       increment(statuses, response.status);
       process.stdout.write(".");
@@ -138,6 +144,7 @@ function chooseScenario() {
 function loginRequest() {
   const attempt = pickWeighted(loginAttempts);
   const scenario = scenarios.find((candidate) => candidate.name === "login");
+  // Store the chosen variant so the final summary can show more than just "login".
   scenario.lastVariant = attempt.name;
 
   return postJson("/login", attempt.body());
@@ -146,6 +153,7 @@ function loginRequest() {
 function validateRequest() {
   const variant = pickWeighted(tokenVariants);
   const scenario = scenarios.find((candidate) => candidate.name === "validate");
+  // Store the chosen variant so success, invalid token, and malformed header paths are visible.
   scenario.lastVariant = variant.name;
 
   return get("/validate", variant.headers());
@@ -154,6 +162,7 @@ function validateRequest() {
 function profileRequest() {
   const variant = pickWeighted(tokenVariants);
   const scenario = scenarios.find((candidate) => candidate.name === "profile");
+  // Reuse token variants so protected-route authorization logs have the same realistic spread.
   scenario.lastVariant = variant.name;
 
   return get("/profile", variant.headers());
@@ -188,6 +197,8 @@ function pick(items) {
 }
 
 function pickWeighted(items) {
+  // Weighting keeps successful traffic dominant while sampling failure modes often enough
+  // for Grafana and Loki to show useful activity.
   const totalWeight = items.reduce((sum, item) => sum + item.weight, 0);
   let remaining = Math.random() * totalWeight;
 
