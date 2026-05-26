@@ -110,6 +110,78 @@ describe("profile authorization", () => {
   });
 });
 
+describe("structured logs", () => {
+  it("logs failed login outcomes without sensitive values", async () => {
+    const { logs, restore } = captureLogs();
+
+    try {
+      await request(app)
+        .post("/login")
+        .send({ username: "walter.white", password: "wrong" });
+    } finally {
+      restore();
+    }
+
+    const log = getLastRequestLog(logs);
+
+    assert.equal(log.event, "http_request");
+    assert.equal(log.route, "/login");
+    assert.equal(log.method, "POST");
+    assert.equal(log.status, 401);
+    assert.equal(log.authFlow, "login");
+    assert.equal(log.authOutcome, "failure");
+    assert.equal(log.failureReason, "invalid_credentials");
+    assert.equal(typeof log.requestId, "string");
+    assert.equal(typeof log.durationMs, "number");
+
+    const serializedLog = JSON.stringify(log);
+    assert.doesNotMatch(serializedLog, /walter\.white/);
+    assert.doesNotMatch(serializedLog, /wrong/);
+  });
+
+  it("logs invalid token outcomes without raw token values", async () => {
+    const { logs, restore } = captureLogs();
+
+    try {
+      await request(app).get("/validate").set("Authorization", "Bearer bad-token");
+    } finally {
+      restore();
+    }
+
+    const log = getLastRequestLog(logs);
+
+    assert.equal(log.route, "/validate");
+    assert.equal(log.method, "GET");
+    assert.equal(log.status, 401);
+    assert.equal(log.authFlow, "token_validation");
+    assert.equal(log.authOutcome, "failure");
+    assert.equal(log.failureReason, "invalid_token");
+
+    const serializedLog = JSON.stringify(log);
+    assert.doesNotMatch(serializedLog, /bad-token/);
+    assert.doesNotMatch(serializedLog, /Authorization/i);
+  });
+
+  it("logs protected-route authorization failures with bounded reasons", async () => {
+    const { logs, restore } = captureLogs();
+
+    try {
+      await request(app).get("/profile");
+    } finally {
+      restore();
+    }
+
+    const log = getLastRequestLog(logs);
+
+    assert.equal(log.route, "/profile");
+    assert.equal(log.method, "GET");
+    assert.equal(log.status, 401);
+    assert.equal(log.authFlow, "authorization");
+    assert.equal(log.authOutcome, "failure");
+    assert.equal(log.failureReason, "missing_token");
+  });
+});
+
 describe("debug endpoints", () => {
   it("returns a predictable slow response", async () => {
     const startedAt = performance.now();
@@ -281,4 +353,29 @@ function getMetricValue(metricsText, metricName, labels) {
 
 function hasLabels(metricLine, labels) {
   return Object.entries(labels).every(([key, value]) => metricLine.includes(`${key}="${value}"`));
+}
+
+function captureLogs() {
+  const logs = [];
+  const previousLog = console.log;
+
+  console.log = (message) => {
+    logs.push(message);
+  };
+
+  return {
+    logs,
+    restore: () => {
+      console.log = previousLog;
+    },
+  };
+}
+
+function getLastRequestLog(logs) {
+  const parsedLogs = logs.map((log) => JSON.parse(log));
+  const requestLogs = parsedLogs.filter((log) => log.event === "http_request");
+
+  assert.ok(requestLogs.length > 0);
+
+  return requestLogs.at(-1);
 }
